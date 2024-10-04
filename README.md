@@ -1,2 +1,3 @@
 # gyakusaisei
 動画を逆再生するツール
+FFmpeg-wasmで作る予定だったけどいろいろ制約が多いのでChatGPTを参考に少しだけ
