@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>動画逆再生ツール</title>
+    <link
+      rel="stylesheet"
+      href="https://cdnjs.cloudflare.com/ajax/libs/bulma/0.9.4/css/bulma.min.css"
+    />
+    <script src="https://unpkg.com/@ffmpeg/ffmpeg@0.9.7/dist/ffmpeg.min.js"></script>
+    <script src="coi-serviceworker.min.js"></script>
+    <style>
+      #video {
+        max-width: 100%;
+        margin: 20px 0;
+      }
+      .modal {
+        display: none;
+        align-items: center;
+        justify-content: center;
+      }
+      .modal.is-active {
+        display: flex;
+      }
+      .loading {
+        animation: fadeIn 1s;
+      }
+      @keyframes fadeIn {
+        from {
+          opacity: 0;
+        }
+        to {
+          opacity: 1;
+        }
+      }
+      #log {
+        white-space: pre-wrap;
+        margin-top: 20px;
+        background-color: #f5f5f5;
+        padding: 10px;
+        border: 1px solid #ddd;
+        border-radius: 5px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h1 class="title">動画逆再生ツール</h1>
+      <div class="field">
+        <label class="label">動画ファイルを選択してください:</label>
+        <div class="control">
+          <input class="input" type="file" id="upload" accept="video/*" />
+        </div>
+      </div>
+      <video id="video" controls></video>
+      <div class="field">
+        <div class="control">
+          <label class="checkbox">
+            <input type="checkbox" id="reverseAudio" /> 音声を逆再生する
+          </label>
+        </div>
+      </div>
+      <div class="control">
+        <button id="convertButton" class="button is-primary" disabled>
+          動画を逆再生する
+        </button>
+      </div>
+      <progress
+        id="progressBar"
+        class="progress is-primary"
+        value="0"
+        max="100"
+        style="display: none"
+      ></progress>
+      <a id="downloadLink" class="button is-link" style="display: none"
+        >逆再生動画をダウンロード</a
+      >
+      <div id="log"></div>
+
+      <!-- モーダル -->
+      <div class="modal" id="loadingModal">
+        <div class="modal-background"></div>
+        <div class="modal-content">
+          <div class="box loading">
+            <h2 class="title">処理中...</h2>
+            <p>しばらくお待ちください。</p>
+          </div>
+        </div>
+        <button class="modal-close is-large" aria-label="close"></button>
+      </div>
+    </div>
+
+    <script>
+      try {
+        const { createFFmpeg, fetchFile } = FFmpeg;
+        const ffmpeg = createFFmpeg({
+          log: true,
+          MEMFS: [
+            { name: 'input.mp4', data: new Uint8Array(1024 * 1024 * 512) },
+          ],
+        });
+        let isProcessing = false;
+
+        // COI Service Workerの登録
+        if ('serviceWorker' in navigator) {
+          navigator.serviceWorker
+            .register('coi-serviceworker.min.js')
+            .then(() => {
+              console.log('COI Service Worker registered successfully.');
+            })
+            .catch((error) => {
+              console.error('COI Service Worker registration failed:', error);
+            });
+        }
+
+        // ファイル選択のイベントリスナー
+        document.getElementById('upload').addEventListener('change', (e) => {
+          const file = e.target.files[0];
+          const video = document.getElementById('video');
+          video.src = URL.createObjectURL(file);
+          document.getElementById('convertButton').disabled = false;
+        });
+
+        // 変換ボタンのイベントリスナー
+        // 変換ボタンのイベントリスナー
+        document
+          .getElementById('convertButton')
+          .addEventListener('click', async () => {
+            if (isProcessing) {
+              showLoadingModal(); // モーダルを表示
+              return; // すでに処理中の場合は何もしない
+            }
+
+            isProcessing = true;
+            const file = document.getElementById('upload').files[0];
+            if (!file) return;
+
+            const progressBar = document.getElementById('progressBar');
+            progressBar.style.display = 'block';
+            progressBar.value = 0;
+
+            try {
+              await ffmpeg.load();
+              ffmpeg.FS('writeFile', 'input.mp4', await fetchFile(file));
+
+              ffmpeg.setProgress(({ ratio }) => {
+                progressBar.value = ratio * 100;
+              });
+
+              // 音声逆再生オプション
+              const reverseAudio = document.getElementById('reverseAudio')
+                .checked
+                ? ['-af', 'areverse']
+                : [];
+
+              // 動画を逆再生
+              await ffmpeg.run(
+                '-i',
+                'input.mp4',
+                '-vf',
+                'reverse',
+                ...reverseAudio, // スプレッド演算子で展開
+                'output.mp4'
+              );
+
+              const data = ffmpeg.FS('readFile', 'output.mp4');
+              const blob = new Blob([data.buffer], { type: 'video/mp4' });
+              const url = URL.createObjectURL(blob);
+
+              const downloadLink = document.getElementById('downloadLink');
+              downloadLink.href = url;
+              downloadLink.style.display = 'block';
+              downloadLink.download = 'reversed.mp4';
+              downloadLink.textContent = '逆再生動画をダウンロード';
+
+              progressBar.style.display = 'none';
+              isProcessing = false; // 処理中フラグを下げる
+              hideLoadingModal(); // モーダルを非表示
+              log('処理が完了しました。'); // 完了ログを表示
+            } catch (error) {
+              isProcessing = false; // 処理中フラグを下げる
+              hideLoadingModal(); // モーダルを非表示
+              log('エラーが発生しました: ' + error.message); // エラーログを表示
+              alert(
+                'エラーが発生しました。\nもしかしたら動画が長すぎる可能性があります'
+              );
+            }
+          });
+
+        function showLoadingModal() {
+          const modal = document.getElementById('loadingModal');
+          modal.classList.add('is-active');
+        }
+
+        function hideLoadingModal() {
+          const modal = document.getElementById('loadingModal');
+          modal.classList.remove('is-active');
+        }
+
+        function log(message) {
+          const logDiv = document.getElementById('log');
+          logDiv.textContent += message + '\n';
+        }
+      } catch {
+        alert(
+          'エラーが発生しました。\nおそらく: 動画の長さが長いため、中断しました'
+        );
+      }
+    </script>
+  </body>
+</html>
